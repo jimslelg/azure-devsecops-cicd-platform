@@ -1,0 +1,11 @@
+{{ .Chart.Name }} {{ .Chart.Version }} deployed to {{ .Values.environment }} as release {{ .Release.Name }} (revision {{ .Release.Revision }}).
+
+Image: {{ include "orders-api.image" . }}
+
+Smoke-test it:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "orders-api.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -s localhost:8080/healthz
+  curl -s localhost:8080/version
+
+Roll back this environment:
+  helm -n {{ .Release.Namespace }} rollback {{ .Release.Name }}

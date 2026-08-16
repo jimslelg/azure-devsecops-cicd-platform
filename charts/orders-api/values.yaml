@@ -1,0 +1,62 @@
+# Defaults; each environment overlays values-<env>.yaml on top.
+
+image:
+  repository: "" # <acr>.azurecr.io/orders-api — set by the pipeline
+  # Deploys pin the exact scanned image. The pipeline passes the digest it
+  # built and Trivy scanned; `tag` exists only as a human-readable fallback
+  # for local experiments and is ignored whenever digest is set.
+  digest: ""
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+environment: dev
+gitSha: "unknown"
+
+serviceAccount:
+  create: true
+  name: orders-api
+  # Client ID of the user-assigned workload identity (terraform output
+  # workload_identity_client_id); enables secretless Key Vault access.
+  workloadIdentityClientId: ""
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# Rollouts never drop capacity; readiness gates the surge pod.
+strategy:
+  maxUnavailable: 0
+  maxSurge: 1
+
+probes:
+  liveness:
+    path: /healthz
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    failureThreshold: 3
+  readiness:
+    path: /readyz
+    initialDelaySeconds: 3
+    periodSeconds: 5
+    failureThreshold: 3
+
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  targetCPUUtilizationPercentage: 70

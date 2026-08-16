@@ -1,0 +1,6 @@
+environment: staging
+replicaCount: 2
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1

@@ -1,0 +1,12 @@
+apiVersion: v2
+name: orders-api
+description: >-
+  Demo workload of the azure-devsecops-cicd-platform. Deployed by the
+  application pipeline via `helm upgrade --install --atomic`; rollback is
+  `helm rollback` to the previous revision.
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: jimslelg
+kubeVersion: ">=1.27.0-0"
