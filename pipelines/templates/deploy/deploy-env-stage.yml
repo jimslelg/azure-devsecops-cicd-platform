@@ -102,7 +102,7 @@ stages:
                   set -euo pipefail
                   VERSION="$(cat app/VERSION)"
                   git config user.name "azure-pipelines"
-                  git config user.email "pipelines@m3-tech.ca"
+                  git config user.email "pipelines@"
                   git tag -a "v${VERSION}" -m "Released to prod by build $(Build.BuildNumber) (digest $(imageDigest))"
                   git push "https://x-access-token:$(githubPat)@github.com/jimslelg/azure-devsecops-cicd-platform.git" "v${VERSION}"
                 displayName: "Tag v(app/VERSION) on prod success"
