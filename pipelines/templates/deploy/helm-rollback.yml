@@ -1,0 +1,57 @@
+# Roll back to the previous Helm revision (or an explicit one) and verify the
+# release is healthy afterwards. Used by the application pipeline's on-failure
+# job and runnable standalone per docs/runbooks/rollback.md.
+parameters:
+  - name: helmVersion
+    type: string
+    default: "3.15.3"
+  - name: environment
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: aksResourceGroup
+    type: string
+  - name: aksClusterName
+    type: string
+  - name: releaseName
+    type: string
+    default: "orders-api"
+  - name: namespace
+    type: string
+    default: "orders"
+  - name: revision # 0 = previous revision
+    type: string
+    default: "0"
+
+steps:
+  - task: AzureCLI@2
+    displayName: "Helm rollback ${{ parameters.releaseName }} (${{ parameters.environment }})"
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        curl -sSfL "https://get.helm.sh/helm-v${{ parameters.helmVersion }}-linux-amd64.tar.gz" \
+          | tar -xz --strip-components=1 linux-amd64/helm
+        sudo mv helm /usr/local/bin/
+        sudo az aks install-cli >/dev/null
+
+        az aks get-credentials \
+          --resource-group "${{ parameters.aksResourceGroup }}" \
+          --name "${{ parameters.aksClusterName }}" \
+          --overwrite-existing
+        kubelogin convert-kubeconfig -l azurecli
+
+        NS="${{ parameters.namespace }}"
+        REL="${{ parameters.releaseName }}"
+
+        echo "History before rollback:"
+        helm -n "$NS" history "$REL" --max 5
+
+        helm -n "$NS" rollback "$REL" ${{ parameters.revision }} --wait --timeout 5m
+
+        echo "History after rollback:"
+        helm -n "$NS" history "$REL" --max 5
+
+        kubectl -n "$NS" rollout status "deployment/$REL" --timeout=120s

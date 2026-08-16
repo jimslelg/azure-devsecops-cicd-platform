@@ -1,0 +1,29 @@
+# SAST + quality gate via SonarQube.
+# Wraps prepare/analyze/publish so callers get the gate in one include.
+# The quality gate itself (coverage >= 80%, zero new blockers) is configured
+# server-side; the publish step fails the pipeline if the gate fails.
+parameters:
+  - name: sonarServiceConnection
+    type: string
+    default: "sonarqube-connection"
+  - name: coverageReportPath
+    type: string
+    default: "app/coverage.xml"
+
+steps:
+  - task: SonarQubePrepare@6
+    displayName: "Security: SonarQube prepare"
+    inputs:
+      SonarQube: ${{ parameters.sonarServiceConnection }}
+      scannerMode: CLI
+      configMode: file # reads sonar-project.properties at repo root
+      extraProperties: |
+        sonar.python.coverage.reportPaths=${{ parameters.coverageReportPath }}
+
+  - task: SonarQubeAnalyze@6
+    displayName: "Security: SonarQube analyze"
+
+  - task: SonarQubePublish@6
+    displayName: "Security: SonarQube quality gate"
+    inputs:
+      pollingTimeoutSec: "300"

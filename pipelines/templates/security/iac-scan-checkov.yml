@@ -1,0 +1,29 @@
+# IaC scanning with Checkov before terraform plan.
+# Policy config and justified suppressions live in .checkov.yaml at repo root.
+parameters:
+  - name: checkovVersion
+    type: string
+    default: "3.2.140" # pinned; upgrades are explicit PRs
+  - name: scanDirectory
+    type: string
+    default: "terraform"
+
+steps:
+  - script: |
+      set -euo pipefail
+      pip install --quiet "checkov==${{ parameters.checkovVersion }}"
+      checkov \
+        --directory ${{ parameters.scanDirectory }} \
+        --config-file .checkov.yaml \
+        --output cli \
+        --output junitxml \
+        --output-file-path console,$(Build.ArtifactStagingDirectory)/checkov-report.xml
+    displayName: "Security: IaC scan (checkov ${{ parameters.checkovVersion }})"
+
+  - task: PublishTestResults@2
+    displayName: "Publish checkov results"
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: $(Build.ArtifactStagingDirectory)/checkov-report.xml
+      testRunTitle: "Checkov — ${{ parameters.scanDirectory }}"

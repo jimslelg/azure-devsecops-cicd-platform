@@ -1,0 +1,62 @@
+# Helm deploy to AKS. --atomic makes the first rollback layer automatic: a
+# release that never becomes healthy is reverted by Helm itself.
+parameters:
+  - name: helmVersion
+    type: string
+    default: "3.15.3" # pinned; upgrades are explicit PRs
+  - name: environment # dev | staging | prod
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: aksResourceGroup
+    type: string
+  - name: aksClusterName
+    type: string
+  - name: releaseName
+    type: string
+    default: "orders-api"
+  - name: namespace
+    type: string
+    default: "orders"
+  - name: chartPath
+    type: string
+    default: "charts/orders-api"
+  - name: imageRepository # <acr>.azurecr.io/orders-api
+    type: string
+  - name: imageDigest # sha256:...
+    type: string
+  - name: workloadIdentityClientId
+    type: string
+    default: ""
+
+steps:
+  - task: AzureCLI@2
+    displayName: "Helm deploy ${{ parameters.releaseName }} → ${{ parameters.environment }}"
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        curl -sSfL "https://get.helm.sh/helm-v${{ parameters.helmVersion }}-linux-amd64.tar.gz" \
+          | tar -xz --strip-components=1 linux-amd64/helm
+        sudo mv helm /usr/local/bin/
+        sudo az aks install-cli >/dev/null
+
+        az aks get-credentials \
+          --resource-group "${{ parameters.aksResourceGroup }}" \
+          --name "${{ parameters.aksClusterName }}" \
+          --overwrite-existing
+        kubelogin convert-kubeconfig -l azurecli
+
+        helm upgrade --install "${{ parameters.releaseName }}" "${{ parameters.chartPath }}" \
+          --namespace "${{ parameters.namespace }}" --create-namespace \
+          --values "${{ parameters.chartPath }}/values-${{ parameters.environment }}.yaml" \
+          --set image.repository="${{ parameters.imageRepository }}" \
+          --set image.digest="${{ parameters.imageDigest }}" \
+          --set gitSha="$(Build.SourceVersion)" \
+          --set serviceAccount.workloadIdentityClientId="${{ parameters.workloadIdentityClientId }}" \
+          --atomic \
+          --timeout 5m
+
+        helm -n "${{ parameters.namespace }}" history "${{ parameters.releaseName }}" --max 5

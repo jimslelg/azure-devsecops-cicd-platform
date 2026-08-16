@@ -1,0 +1,5 @@
+# Trivy suppressions.
+# CONVENTION: every entry MUST carry a comment with CVE link, owner, reason,
+# and expiry date. Expired entries fail review. Currently empty — the gate
+# blocks on HIGH/CRITICAL with --ignore-unfixed, so only unfixable findings
+# with documented risk acceptance belong here.

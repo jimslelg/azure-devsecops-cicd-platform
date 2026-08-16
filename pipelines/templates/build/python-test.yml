@@ -1,0 +1,42 @@
+# Install, unit-test, and publish coverage for the Python app.
+# The coverage gate (--cov-fail-under) lives in pytest.ini so local runs and
+# CI enforce the same bar.
+parameters:
+  - name: pythonVersion
+    type: string
+    default: "3.12"
+  - name: workingDirectory
+    type: string
+    default: "app"
+
+steps:
+  - task: UsePythonVersion@0
+    displayName: "Use Python ${{ parameters.pythonVersion }}"
+    inputs:
+      versionSpec: ${{ parameters.pythonVersion }}
+
+  - script: |
+      set -euo pipefail
+      python -m pip install --quiet --upgrade pip
+      pip install --quiet -r requirements-dev.txt
+    workingDirectory: ${{ parameters.workingDirectory }}
+    displayName: "Install dependencies"
+
+  - script: |
+      set -euo pipefail
+      python -m pytest --junitxml=junit-results.xml
+    workingDirectory: ${{ parameters.workingDirectory }}
+    displayName: "Unit tests + coverage gate"
+
+  - task: PublishTestResults@2
+    displayName: "Publish test results"
+    condition: succeededOrFailed()
+    inputs:
+      testResultsFormat: JUnit
+      testResultsFiles: ${{ parameters.workingDirectory }}/junit-results.xml
+      testRunTitle: "orders-api unit tests"
+
+  - task: PublishCodeCoverageResults@2
+    displayName: "Publish coverage"
+    inputs:
+      summaryFileLocation: ${{ parameters.workingDirectory }}/coverage.xml

@@ -1,0 +1,57 @@
+# Plan against one environment's isolated state and publish the binary plan
+# as an artifact. Apply consumes THAT artifact — approvers approve exactly
+# what will run, not a re-plan that could differ.
+parameters:
+  - name: terraformVersion
+    type: string
+    default: "1.5.7"
+  - name: environment # dev | staging | prod
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: workingDirectory
+    type: string
+    default: "terraform"
+
+steps:
+  - script: |
+      set -euo pipefail
+      curl -sSfL -o tf.zip "https://releases.hashicorp.com/terraform/${{ parameters.terraformVersion }}/terraform_${{ parameters.terraformVersion }}_linux_amd64.zip"
+      unzip -o -q tf.zip terraform && sudo mv terraform /usr/local/bin/
+    displayName: "Install terraform ${{ parameters.terraformVersion }}"
+
+  - task: AzureCLI@2
+    displayName: "Terraform plan (${{ parameters.environment }})"
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      addSpnToEnvironment: true
+      workingDirectory: ${{ parameters.workingDirectory }}
+      inlineScript: |
+        set -euo pipefail
+        export ARM_USE_OIDC=true
+        export ARM_CLIENT_ID="${servicePrincipalId}"
+        export ARM_OIDC_TOKEN="${idToken}"
+        export ARM_TENANT_ID="${tenantId}"
+        export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+
+        terraform init -input=false \
+          -backend-config="environments/${{ parameters.environment }}/backend.hcl"
+
+        terraform plan -input=false -detailed-exitcode \
+          -var-file="environments/${{ parameters.environment }}/${{ parameters.environment }}.tfvars" \
+          -out="$(Build.ArtifactStagingDirectory)/${{ parameters.environment }}.tfplan" \
+          || rc=$?
+        # detailed-exitcode: 0 = no changes, 2 = changes to apply, 1 = error
+        rc=${rc:-0}
+        if [ "$rc" = "1" ]; then exit 1; fi
+        echo "##vso[task.setvariable variable=planHasChanges;isOutput=true]$([ "$rc" = "2" ] && echo true || echo false)"
+
+        terraform show -no-color "$(Build.ArtifactStagingDirectory)/${{ parameters.environment }}.tfplan" \
+          > "$(Build.ArtifactStagingDirectory)/${{ parameters.environment }}-plan.txt"
+    name: plan
+
+  - publish: $(Build.ArtifactStagingDirectory)
+    artifact: tfplan-${{ parameters.environment }}
+    displayName: "Publish plan artifact"

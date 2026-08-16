@@ -1,0 +1,26 @@
+# Trivy filesystem scan: dependency vulnerabilities + IaC misconfig in the
+# working tree. Used on PRs for fast feedback before any image exists.
+parameters:
+  - name: trivyVersion
+    type: string
+    default: "0.53.0" # pinned; upgrades are explicit PRs
+  - name: scanPath
+    type: string
+    default: "."
+  - name: severity
+    type: string
+    default: "HIGH,CRITICAL"
+
+steps:
+  - script: |
+      set -euo pipefail
+      curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${{ parameters.trivyVersion }}/trivy_${{ parameters.trivyVersion }}_Linux-64bit.tar.gz" \
+        | tar -xz trivy
+      ./trivy fs \
+        --scanners vuln,misconfig,secret \
+        --severity ${{ parameters.severity }} \
+        --ignorefile .trivyignore \
+        --exit-code 1 \
+        --format table \
+        ${{ parameters.scanPath }}
+    displayName: "Security: filesystem scan (trivy ${{ parameters.trivyVersion }})"

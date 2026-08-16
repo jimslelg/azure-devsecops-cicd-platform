@@ -1,0 +1,20 @@
+# Gitleaks configuration — extends the default ruleset.
+# CONVENTION: every allowlist entry MUST state owner + reason. Placeholder
+# values only; real credentials are never allowlisted, they are rotated.
+
+title = "azure-devsecops-cicd-platform"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented false positives"
+paths = [
+  # Owner: jimslelg. Lock files / test fixtures would go here; none yet.
+]
+regexes = [
+  # Owner: jimslelg. RFC 5737 documentation CIDRs used in tfvars examples
+  # (203.0.113.0/24, 198.51.100.0/24) are not secrets.
+  '''203\.0\.113\.''',
+  '''198\.51\.100\.''',
+]

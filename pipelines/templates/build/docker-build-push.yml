@@ -1,0 +1,45 @@
+# Build the image and push it to ACR, exporting the immutable DIGEST that
+# every later stage (scan, deploy) references. Tags are for humans; the digest
+# is the artifact. Auth is the service connection's federated identity —
+# `az acr login` mints a scoped token, nothing is stored.
+parameters:
+  - name: azureServiceConnection
+    type: string
+  - name: acrLoginServer # e.g. acrdevsecopsdev.azurecr.io
+    type: string
+  - name: imageRepository
+    type: string
+    default: "orders-api"
+  - name: buildContext
+    type: string
+    default: "app"
+  - name: imageTag # e.g. 1.0.0-a1b2c3d
+    type: string
+
+steps:
+  - task: AzureCLI@2
+    displayName: "Docker build + push ${{ parameters.imageRepository }}:${{ parameters.imageTag }}"
+    name: buildpush
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        IMAGE="${{ parameters.acrLoginServer }}/${{ parameters.imageRepository }}"
+        APP_VERSION="$(cat ${{ parameters.buildContext }}/VERSION)"
+
+        az acr login --name "$(echo "${{ parameters.acrLoginServer }}" | cut -d. -f1)"
+
+        docker build \
+          --build-arg GIT_SHA="$(Build.SourceVersion)" \
+          --build-arg APP_VERSION="${APP_VERSION}" \
+          --tag "${IMAGE}:${{ parameters.imageTag }}" \
+          ${{ parameters.buildContext }}
+
+        docker push "${IMAGE}:${{ parameters.imageTag }}"
+
+        DIGEST="$(docker inspect --format='{{index .RepoDigests 0}}' "${IMAGE}:${{ parameters.imageTag }}" | cut -d@ -f2)"
+        echo "Pushed ${IMAGE}@${DIGEST}"
+        echo "##vso[task.setvariable variable=imageDigest;isOutput=true]${DIGEST}"
+        echo "##vso[task.setvariable variable=imageReference;isOutput=true]${IMAGE}@${DIGEST}"

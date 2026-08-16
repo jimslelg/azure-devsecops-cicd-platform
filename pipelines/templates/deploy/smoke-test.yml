@@ -1,0 +1,57 @@
+# Post-deploy smoke tests, run in-cluster via kubectl so they work before any
+# public ingress exists. Asserts the service answers AND that the deployed
+# revision is the one this pipeline built (closing the loop on the digest).
+parameters:
+  - name: environment
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: aksResourceGroup
+    type: string
+  - name: aksClusterName
+    type: string
+  - name: releaseName
+    type: string
+    default: "orders-api"
+  - name: namespace
+    type: string
+    default: "orders"
+  - name: expectedGitSha
+    type: string
+    default: "$(Build.SourceVersion)"
+
+steps:
+  - task: AzureCLI@2
+    displayName: "Smoke tests (${{ parameters.environment }})"
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        sudo az aks install-cli >/dev/null
+        az aks get-credentials \
+          --resource-group "${{ parameters.aksResourceGroup }}" \
+          --name "${{ parameters.aksClusterName }}" \
+          --overwrite-existing
+        kubelogin convert-kubeconfig -l azurecli
+
+        NS="${{ parameters.namespace }}"
+        SVC="${{ parameters.releaseName }}"
+        RUNNER=(kubectl -n "$NS" run smoke-$(Build.BuildId) --rm -i --restart=Never
+                --image=curlimages/curl:8.8.0 --command --)
+
+        echo "smoke 1/3: liveness"
+        "${RUNNER[@]}" curl -sf "http://${SVC}/healthz" | grep -q '"ok"'
+
+        echo "smoke 2/3: deployed revision matches build"
+        VERSION_JSON="$("${RUNNER[@]}" curl -sf "http://${SVC}/version")"
+        echo "$VERSION_JSON"
+        echo "$VERSION_JSON" | grep -q "${{ parameters.expectedGitSha }}"
+
+        echo "smoke 3/3: real endpoint round-trip"
+        "${RUNNER[@]}" curl -sf -X POST "http://${SVC}/api/v1/orders" \
+          -H 'Content-Type: application/json' \
+          -d '{"item":"smoke-test","quantity":1,"unit_price":1.0}' | grep -q '"created"'
+
+        echo "All smoke tests passed."

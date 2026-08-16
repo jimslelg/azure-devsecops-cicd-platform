@@ -1,0 +1,41 @@
+# Trivy image scan by DIGEST. The scanned reference is exactly what deploy
+# stages receive — scanning a tag would leave a race between scan and deploy.
+# The image is already in ACR (digests only exist after push); a failed scan
+# fails this stage, and deploy stages depend on it, so a vulnerable image can
+# sit in the registry but can never be deployed.
+parameters:
+  - name: trivyVersion
+    type: string
+    default: "0.53.0" # pinned; upgrades are explicit PRs
+  - name: imageReference # <acr>.azurecr.io/orders-api@sha256:...
+    type: string
+  - name: severity
+    type: string
+    default: "HIGH,CRITICAL"
+  - name: azureServiceConnection
+    type: string
+
+steps:
+  - task: AzureCLI@2
+    displayName: "Security: image scan (trivy ${{ parameters.trivyVersion }})"
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      inlineScript: |
+        set -euo pipefail
+        curl -sSfL "https://github.com/aquasecurity/trivy/releases/download/v${{ parameters.trivyVersion }}/trivy_${{ parameters.trivyVersion }}_Linux-64bit.tar.gz" \
+          | tar -xz trivy
+
+        # Token-based login so trivy can pull from ACR without stored creds.
+        ACR="$(echo "${{ parameters.imageReference }}" | cut -d/ -f1)"
+        export TRIVY_USERNAME="00000000-0000-0000-0000-000000000000"
+        export TRIVY_PASSWORD="$(az acr login --name "${ACR%%.*}" --expose-token --output tsv --query accessToken)"
+
+        ./trivy image \
+          --severity ${{ parameters.severity }} \
+          --ignorefile .trivyignore \
+          --ignore-unfixed \
+          --exit-code 1 \
+          --format table \
+          "${{ parameters.imageReference }}"

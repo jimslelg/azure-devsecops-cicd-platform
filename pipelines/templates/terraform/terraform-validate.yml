@@ -1,0 +1,28 @@
+# fmt + validate. Backend-free init so validation needs no Azure access —
+# this is what PR validation runs.
+parameters:
+  - name: terraformVersion
+    type: string
+    default: "1.5.7" # pinned; upgrades are explicit PRs
+  - name: workingDirectory
+    type: string
+    default: "terraform"
+
+steps:
+  - script: |
+      set -euo pipefail
+      curl -sSfL -o tf.zip "https://releases.hashicorp.com/terraform/${{ parameters.terraformVersion }}/terraform_${{ parameters.terraformVersion }}_linux_amd64.zip"
+      unzip -o -q tf.zip terraform && sudo mv terraform /usr/local/bin/
+      terraform version
+    displayName: "Install terraform ${{ parameters.terraformVersion }}"
+
+  - script: terraform fmt -check -recursive -diff
+    workingDirectory: ${{ parameters.workingDirectory }}
+    displayName: "Terraform fmt check"
+
+  - script: |
+      set -euo pipefail
+      terraform init -backend=false -input=false
+      terraform validate
+    workingDirectory: ${{ parameters.workingDirectory }}
+    displayName: "Terraform validate"

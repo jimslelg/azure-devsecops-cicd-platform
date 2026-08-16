@@ -1,0 +1,47 @@
+# Apply the EXACT plan artifact the approver reviewed. Runs inside a
+# deployment job targeting the environment resource, so the manual approval
+# (an environment check, not YAML) has already been granted when this starts.
+parameters:
+  - name: terraformVersion
+    type: string
+    default: "1.5.7"
+  - name: environment
+    type: string
+  - name: azureServiceConnection
+    type: string
+  - name: workingDirectory
+    type: string
+    default: "terraform"
+
+steps:
+  - download: current
+    artifact: tfplan-${{ parameters.environment }}
+    displayName: "Download reviewed plan"
+
+  - script: |
+      set -euo pipefail
+      curl -sSfL -o tf.zip "https://releases.hashicorp.com/terraform/${{ parameters.terraformVersion }}/terraform_${{ parameters.terraformVersion }}_linux_amd64.zip"
+      unzip -o -q tf.zip terraform && sudo mv terraform /usr/local/bin/
+    displayName: "Install terraform ${{ parameters.terraformVersion }}"
+
+  - task: AzureCLI@2
+    displayName: "Terraform apply (${{ parameters.environment }})"
+    inputs:
+      azureSubscription: ${{ parameters.azureServiceConnection }}
+      scriptType: bash
+      scriptLocation: inlineScript
+      addSpnToEnvironment: true
+      workingDirectory: ${{ parameters.workingDirectory }}
+      inlineScript: |
+        set -euo pipefail
+        export ARM_USE_OIDC=true
+        export ARM_CLIENT_ID="${servicePrincipalId}"
+        export ARM_OIDC_TOKEN="${idToken}"
+        export ARM_TENANT_ID="${tenantId}"
+        export ARM_SUBSCRIPTION_ID="$(az account show --query id -o tsv)"
+
+        terraform init -input=false \
+          -backend-config="environments/${{ parameters.environment }}/backend.hcl"
+
+        terraform apply -input=false -auto-approve \
+          "$(Pipeline.Workspace)/tfplan-${{ parameters.environment }}/${{ parameters.environment }}.tfplan"

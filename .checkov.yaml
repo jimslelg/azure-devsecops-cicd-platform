@@ -1,0 +1,20 @@
+# Checkov policy configuration.
+# CONVENTION: every skip-check entry MUST carry a comment with owner + reason
+# + (if temporary) an expiry. Unjustified suppressions are rejected in review.
+framework:
+  - terraform
+compact: true
+quiet: true
+skip-check:
+  # CKV_AZURE_117 (AKS disk encryption set): demo uses platform-managed keys;
+  # CMK requires a Key Vault key + DES that would add cost with no
+  # demonstrative value. Owner: jimslelg. Revisit if repo gains real data.
+  - CKV_AZURE_117
+  # CKV_AZURE_4 (AKS monitoring/OMS agent): observability stack is
+  # demonstrated in the sibling azure-monitoring-platform repo; enabling
+  # Log Analytics here would double the demo cost. Owner: jimslelg.
+  - CKV_AZURE_4
+  # CKV_AZURE_189 (Key Vault public network access): network_acls default is
+  # Allow for demo reachability; private endpoint hardening is on the roadmap
+  # (see ROADMAP.md). Owner: jimslelg.
+  - CKV_AZURE_189
