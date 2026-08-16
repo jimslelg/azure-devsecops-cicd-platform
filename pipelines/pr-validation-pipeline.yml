@@ -1,0 +1,64 @@
+# PR validation: every gate that can run without deploying, in parallel jobs
+# for the fastest possible signal. Branch protection on `main` requires this
+# pipeline to pass, so nothing scannable reaches the trunk unscanned.
+name: pr-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none # PR-only pipeline
+
+pr:
+  branches:
+    include: [main]
+
+pool:
+  vmImage: ubuntu-22.04
+
+variables:
+  - group: vg-devsecops-shared
+
+stages:
+  - stage: Validate
+    displayName: "PR validation"
+    jobs:
+      - job: SecretScan
+        displayName: "Secret scan"
+        steps:
+          - checkout: self
+            fetchDepth: 0 # gitleaks scans full history
+          - template: templates/security/secret-scan.yml
+
+      - job: BuildAndTest
+        displayName: "Build, unit tests, SAST"
+        steps:
+          - template: templates/build/python-test.yml
+          - template: templates/security/sast-sonarqube.yml
+            parameters:
+              sonarServiceConnection: $(sonarServiceConnection)
+
+      - job: Infrastructure
+        displayName: "Terraform validate + IaC scan"
+        steps:
+          - template: templates/terraform/terraform-validate.yml
+          - template: templates/security/iac-scan-checkov.yml
+
+      - job: DependencyScan
+        displayName: "Dependency + misconfig scan"
+        steps:
+          - template: templates/security/trivy-fs-scan.yml
+
+      - job: HelmLint
+        displayName: "Helm chart lint"
+        variables:
+          helmVersion: "3.15.3"
+        steps:
+          - script: |
+              set -euo pipefail
+              curl -sSfL "https://get.helm.sh/helm-v$(helmVersion)-linux-amd64.tar.gz" \
+                | tar -xz --strip-components=1 linux-amd64/helm
+              for env in dev staging prod; do
+                ./helm lint charts/orders-api --values "charts/orders-api/values-${env}.yaml" --strict
+                ./helm template smoke charts/orders-api --values "charts/orders-api/values-${env}.yaml" \
+                  --set image.repository=example.azurecr.io/orders-api \
+                  --set image.digest=sha256:0000000000000000000000000000000000000000000000000000000000000000 \
+                  > /dev/null
+              done
+            displayName: "helm lint + template (all environments)"

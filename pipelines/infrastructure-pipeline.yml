@@ -1,0 +1,45 @@
+# Infrastructure pipeline: validate + IaC scan once, then per environment
+# plan → (approval on the ADO Environment) → apply, strictly dev → staging →
+# prod. Apply always executes the exact plan artifact the approver reviewed.
+name: infra-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include:
+      - terraform/*
+      - pipelines/infrastructure-pipeline.yml
+      - pipelines/templates/terraform/*
+
+pr: none # PRs are covered by pr-validation-pipeline.yml
+
+pool:
+  vmImage: ubuntu-22.04
+
+variables:
+  - group: vg-devsecops-shared
+
+stages:
+  - stage: Validate
+    displayName: "Validate + IaC scan"
+    jobs:
+      - job: ValidateAndScan
+        steps:
+          - template: templates/terraform/terraform-validate.yml
+          - template: templates/security/iac-scan-checkov.yml
+
+  - template: templates/terraform/terraform-env-stages.yml
+    parameters:
+      environment: dev
+      dependsOn: [Validate]
+
+  - template: templates/terraform/terraform-env-stages.yml
+    parameters:
+      environment: staging
+      dependsOn: [Apply_dev]
+
+  - template: templates/terraform/terraform-env-stages.yml
+    parameters:
+      environment: prod
+      dependsOn: [Apply_staging]

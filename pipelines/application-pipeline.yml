@@ -1,0 +1,87 @@
+# Application pipeline: build → test → SAST → package (image pushed and
+# scanned BY DIGEST) → deploy dev (automatic) → staging (approval) → prod
+# (2 approvals + business hours), smoke tests and automatic rollback at every
+# stop. One immutable digest travels the whole way.
+name: app-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger:
+  branches:
+    include: [main]
+  paths:
+    include:
+      - app/*
+      - charts/*
+      - pipelines/application-pipeline.yml
+      - pipelines/templates/*
+
+pr: none # PRs are covered by pr-validation-pipeline.yml
+
+pool:
+  vmImage: ubuntu-22.04
+
+variables:
+  - group: vg-devsecops-shared
+
+stages:
+  - stage: Build
+    displayName: "Build + test + SAST"
+    jobs:
+      - job: TestAndAnalyze
+        steps:
+          - template: templates/build/python-test.yml
+          - template: templates/security/sast-sonarqube.yml
+            parameters:
+              sonarServiceConnection: $(sonarServiceConnection)
+
+  - stage: Package
+    displayName: "Package + image scan"
+    dependsOn: Build
+    variables:
+      - group: vg-devsecops-dev # image is born in the dev registry
+    jobs:
+      - job: BuildPush
+        displayName: "Docker build + push"
+        steps:
+          - script: |
+              set -euo pipefail
+              SHORT_SHA="$(echo "$(Build.SourceVersion)" | cut -c1-7)"
+              echo "##vso[task.setvariable variable=imageTag]$(cat app/VERSION)-${SHORT_SHA}"
+            displayName: "Compute image tag"
+          - template: templates/build/docker-build-push.yml
+            parameters:
+              azureServiceConnection: $(azureServiceConnection)
+              acrLoginServer: $(acrLoginServerDev)
+              imageRepository: $(imageRepository)
+              imageTag: $(imageTag)
+
+      - job: ImageScan
+        displayName: "Container scan (blocks deploys)"
+        dependsOn: BuildPush
+        variables:
+          imageReference: $[ dependencies.BuildPush.outputs['buildpush.imageReference'] ]
+        steps:
+          - template: templates/security/trivy-image-scan.yml
+            parameters:
+              imageReference: $(imageReference)
+              azureServiceConnection: $(azureServiceConnection)
+
+  - template: templates/deploy/deploy-env-stage.yml
+    parameters:
+      environment: dev
+      dependsOn: [Package]
+      acrLoginServer: $(acrLoginServerDev)
+
+  - template: templates/deploy/deploy-env-stage.yml
+    parameters:
+      environment: staging
+      dependsOn: [Package, Deploy_dev]
+      acrLoginServer: $(acrLoginServerStaging)
+      importFromAcr: $(acrLoginServerDev)
+
+  - template: templates/deploy/deploy-env-stage.yml
+    parameters:
+      environment: prod
+      dependsOn: [Package, Deploy_staging]
+      acrLoginServer: $(acrLoginServerProd)
+      importFromAcr: $(acrLoginServerStaging)
+      tagReleaseOnSuccess: true

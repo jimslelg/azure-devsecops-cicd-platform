@@ -1,0 +1,55 @@
+# Stage pair for one environment: Plan (publishes the plan artifact) and
+# Apply (deployment job gated by the ADO Environment's approval check, which
+# consumes the exact plan the approver reviewed).
+#
+# Apply is skipped entirely when the plan reports no changes — approvers are
+# only interrupted when there is something to approve.
+parameters:
+  - name: environment # dev | staging | prod
+    type: string
+  - name: dependsOn
+    type: object
+    default: []
+
+stages:
+  - stage: Plan_${{ parameters.environment }}
+    displayName: "Plan (${{ parameters.environment }})"
+    dependsOn: ${{ parameters.dependsOn }}
+    # The previous environment's Apply is legitimately SKIPPED when its plan
+    # had no changes; that must not skip this environment's plan. Only a real
+    # failure or cancellation stops the promotion chain.
+    condition: not(or(failed(), canceled()))
+    variables:
+      - group: vg-devsecops-shared
+      - group: vg-devsecops-${{ parameters.environment }}
+    jobs:
+      - job: Plan
+        steps:
+          - template: terraform-plan.yml
+            parameters:
+              environment: ${{ parameters.environment }}
+              azureServiceConnection: $(azureServiceConnection)
+
+  - stage: Apply_${{ parameters.environment }}
+    displayName: "Apply (${{ parameters.environment }})"
+    dependsOn: Plan_${{ parameters.environment }}
+    condition: >
+      and(succeeded(),
+          eq(dependencies.Plan_${{ parameters.environment }}.outputs['Plan.plan.planHasChanges'], 'true'))
+    variables:
+      - group: vg-devsecops-shared
+      - group: vg-devsecops-${{ parameters.environment }}
+    jobs:
+      - deployment: Apply
+        # Approval lives on this environment resource in the ADO portal —
+        # deliberately not encoded in YAML (see docs/environment-strategy.md).
+        environment: devsecops-${{ parameters.environment }}
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+                - template: terraform-apply.yml
+                  parameters:
+                    environment: ${{ parameters.environment }}
+                    azureServiceConnection: $(azureServiceConnection)

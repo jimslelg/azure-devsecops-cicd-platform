@@ -1,0 +1,108 @@
+# One deploy stage: (optional ACR import from the previous environment's
+# registry, digest-preserving) → helm deploy → smoke tests, with a rollback
+# job that fires only on failure, and an optional release-tag job for prod.
+#
+# The stage must list `Package` in dependsOn — the image digest is read from
+# stageDependencies, which only resolves across direct dependencies.
+parameters:
+  - name: environment # dev | staging | prod
+    type: string
+  - name: dependsOn
+    type: object
+  - name: acrLoginServer # macro, e.g. $(acrLoginServerDev)
+    type: string
+  - name: importFromAcr # previous env's login server; empty = image already present
+    type: string
+    default: ""
+  - name: tagReleaseOnSuccess
+    type: boolean
+    default: false
+
+stages:
+  - stage: Deploy_${{ parameters.environment }}
+    displayName: "Deploy (${{ parameters.environment }})"
+    dependsOn: ${{ parameters.dependsOn }}
+    variables:
+      - group: vg-devsecops-shared
+      - group: vg-devsecops-${{ parameters.environment }}
+    jobs:
+      - deployment: DeployAndVerify
+        # Approval + business-hours checks live on this environment resource
+        # in the ADO portal (see docs/environment-strategy.md).
+        environment: devsecops-${{ parameters.environment }}
+        variables:
+          imageDigest: $[ stageDependencies.Package.BuildPush.outputs['buildpush.imageDigest'] ]
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - ${{ if ne(parameters.importFromAcr, '') }}:
+                    # Digest-preserving promotion between per-env registries:
+                    # `az acr import` copies the manifest unchanged, so the
+                    # digest scanned in Package is the digest deployed here.
+                    # Requires this env's pipeline identity to hold AcrPull on
+                    # the source registry (documented in variable-groups.md).
+                    - task: AzureCLI@2
+                      displayName: "Promote image ${{ parameters.importFromAcr }} → ${{ parameters.acrLoginServer }}"
+                      inputs:
+                        azureSubscription: $(azureServiceConnection)
+                        scriptType: bash
+                        scriptLocation: inlineScript
+                        inlineScript: |
+                          set -euo pipefail
+                          az acr import \
+                            --name "$(echo "${{ parameters.acrLoginServer }}" | cut -d. -f1)" \
+                            --source "${{ parameters.importFromAcr }}/$(imageRepository)@$(imageDigest)" \
+                            --image "$(imageRepository):promoted-$(Build.BuildId)" \
+                            --force
+
+                - template: helm-deploy.yml
+                  parameters:
+                    environment: ${{ parameters.environment }}
+                    azureServiceConnection: $(azureServiceConnection)
+                    aksResourceGroup: $(aksResourceGroup)
+                    aksClusterName: $(aksClusterName)
+                    imageRepository: ${{ parameters.acrLoginServer }}/$(imageRepository)
+                    imageDigest: $(imageDigest)
+                    workloadIdentityClientId: $(workloadIdentityClientId)
+
+                - template: smoke-test.yml
+                  parameters:
+                    environment: ${{ parameters.environment }}
+                    azureServiceConnection: $(azureServiceConnection)
+                    aksResourceGroup: $(aksResourceGroup)
+                    aksClusterName: $(aksClusterName)
+
+      - job: RollbackOnFailure
+        displayName: "Rollback (only on failure)"
+        dependsOn: DeployAndVerify
+        condition: failed()
+        steps:
+          - checkout: self
+          - template: helm-rollback.yml
+            parameters:
+              environment: ${{ parameters.environment }}
+              azureServiceConnection: $(azureServiceConnection)
+              aksResourceGroup: $(aksResourceGroup)
+              aksClusterName: $(aksClusterName)
+
+      - ${{ if parameters.tagReleaseOnSuccess }}:
+          - job: TagRelease
+            displayName: "Tag release in git"
+            dependsOn: DeployAndVerify
+            condition: succeeded()
+            variables:
+              imageDigest: $[ stageDependencies.Package.BuildPush.outputs['buildpush.imageDigest'] ]
+            steps:
+              - checkout: self
+                persistCredentials: false
+              - script: |
+                  set -euo pipefail
+                  VERSION="$(cat app/VERSION)"
+                  git config user.name "azure-pipelines"
+                  git config user.email "pipelines@m3-tech.ca"
+                  git tag -a "v${VERSION}" -m "Released to prod by build $(Build.BuildNumber) (digest $(imageDigest))"
+                  git push "https://x-access-token:$(githubPat)@github.com/jimslelg/azure-devsecops-cicd-platform.git" "v${VERSION}"
+                displayName: "Tag v(app/VERSION) on prod success"
